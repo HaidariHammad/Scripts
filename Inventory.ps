@@ -1,0 +1,110 @@
+function Generate-PnPSitePermissionRpt {
+    param (
+        [string]$SiteURL,
+        [ref]$ReportData,
+        [switch]$Recursive
+    )
+
+    function Get-Members($Group) {
+        $members = Get-PnPGroupMember -Group $Group.Title
+        foreach ($member in $members) {
+            if ($member.PrincipalType -eq "SecurityGroup" -or $member.PrincipalType -eq "SharePointGroup") {
+                $nestedGroupType = if ($member.PrincipalType -eq "SecurityGroup") { "Security Group" } else { "SharePoint Group" }
+                $ReportData.Value += [PSCustomObject]@{
+                    SiteUrl   = $SiteURL
+                    Group     = $Group.Title
+                    User      = $member.Title
+                    Login     = $member.LoginName
+                    GroupType = $nestedGroupType
+                }
+                # Recursively get members of the nested group
+                $nestedGroup = Get-PnPGroup -Identity $member.Title -ErrorAction SilentlyContinue
+                if ($nestedGroup) {
+                    Get-Members -Group $nestedGroup
+                }
+            } else {
+                $ReportData.Value += [PSCustomObject]@{
+                    SiteUrl   = $SiteURL
+                    Group     = $Group.Title
+                    User      = $member.Title
+                    Login     = $member.LoginName
+                    GroupType = "User"
+                }
+            }
+        }
+    }
+
+    try {
+        # Connect to the site
+        Connect-PnPOnline -Url $SiteURL -Interactive
+        
+        # Retrieve site groups
+        $groups = Get-PnPGroup
+        
+        foreach ($group in $groups) {
+            Get-Members -Group $group
+        }
+        
+        Write-Host "Report data collected for site: $SiteURL"
+    } catch {
+        Write-Host "Access denied for site: $SiteURL. Adding haidari-hammad@aramark.com as Site Collection Administrator and retrying..."
+        
+        try {
+            # Add haidari-hammad@aramark.com as Site Collection Administrator
+            Set-PnPTenantSite -Identity $SiteURL -Owners "xhaidarih@aramark.com"
+            
+            # Retry connection and data collection
+            Connect-PnPOnline -Url $SiteURL -Interactive
+            $groups = Get-PnPGroup
+            
+            foreach ($group in $groups) {
+                Get-Members -Group $group
+            }
+            
+            Write-Host "Report data collected for site: $SiteURL after adding admin rights."
+        } catch {
+            Write-Host "Failed to add admin rights or collect data for site: $SiteURL. Moving to next site."
+        }
+    }
+}
+
+# Connect to Admin Center
+$TenantAdminURL = "#"
+Connect-PnPOnline -Url $TenantAdminURL -Interactive
+
+# Get All Site collections - Exclude: Search Center, Redirect site, Mysite Host, App Catalog, Content Type Hub, eDiscovery, Bot Sites, Personal Sites, and OneDrive for Business profiles
+$SitesCollections = Get-PnPTenantSite | Where-Object {
+    $_.Template -notin ("SRCHCEN#0","REDIRECTSITE#0", "SPSMSITEHOST#0", "APPCATALOG#0", "POINTPUBLISHINGHUB#0", "EDISC#0", "STS#-1") -and
+    $_.Url -notmatch "/portals/personal/" -and
+    $_.Url -notmatch "/my.sharepoint.com/"
+}
+
+# Select the first 50 site collections
+$SitesCollections = $SitesCollections | Select-Object -First 50
+
+# Initialize an array to hold the consolidated report data
+$AllReportData = @()
+
+# Total number of site collections
+$TotalSites = $SitesCollections.Count
+$CurrentSiteIndex = 0
+
+# Loop through each site collection
+ForEach ($Site in $SitesCollections) {
+    $CurrentSiteIndex++
+    $PercentComplete = [math]::Round(($CurrentSiteIndex / $TotalSites) * 100)
+    
+    # Show progress bar
+    Write-Progress -Activity "Generating Site Permissions Report" -Status "Processing $Site.Url ($CurrentSiteIndex of $TotalSites)" -PercentComplete $PercentComplete
+    
+    Write-Host "Generating Report for Site:" $Site.Url
+    
+    # Collect data for the site and append it to the overall report data
+    Generate-PnPSitePermissionRpt -SiteURL $Site.Url -ReportData ([ref]$AllReportData) -Recursive
+}
+
+# Write the consolidated report data to a single CSV file
+$ReportFile = "C:\Temp\Consolidated_SitePermissionsReport.csv"
+$AllReportData | Export-Csv -Path $ReportFile -NoTypeInformation
+
+Write-Host "Consolidated report generated at: $ReportFile"s
