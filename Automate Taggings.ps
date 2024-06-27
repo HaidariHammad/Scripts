@@ -1,0 +1,101 @@
+# Define the site URL and library
+$siteUrl = "#"
+$library = "Shared Documents"
+
+# Connect to SharePoint Online
+Connect-PnPOnline -Url $siteUrl -Interactive
+
+# Define master values for matching
+$ombForms = @("7600B", "7600A", "Form", "1500", "1200", "1800")
+$partners = @("ACF", "CMS", "USDA", "CDC", "DOL", "HUD", "IHS", "EPA", "DOT", "IRS", "OCS", "FRA", "DOI", "ACL", "HRSA", "OASH", "OLDC", "ANA", "OCC", "ROM", "ONDCP", "FMCSA", "FYSB", "DHS", "SSA", "AMS", "FHWA", "OHS", "OCSE", "FAA", "MARAD", "SBA", "CSBG", "LIHEAP", "OIG", "EAC", "Treasury", "HHS", "ONC", "OTIP", "AMJP", "OGCR", "OPRE", "OAR")
+$fiscalYears = @("FY23", "FY22", "FY21", "FY24", "FY20", "FY18", "FY19", "FY17", "FY16")
+$products = @("ARM", "O&M", "GMM", "inForm", "RRM", "MOD", "AM", "Closeout")
+
+# Function to clear outdated values
+function Clear-Columns {
+    param (
+        $items
+    )
+
+    foreach ($item in $items) {
+        $updateValues = @{
+            "FiscalYear" = $null
+            "Partnername" = $null
+            "OMBForm" = $null
+            "Product" = $null
+        }
+
+        Set-PnPListItem -List $library -Identity $item.Id -Values $updateValues
+    }
+}
+
+# Function to process items in the library
+function Process-Items {
+    param (
+        $items
+    )
+
+    foreach ($item in $items) {
+        $fileName = $item["FileLeafRef"]
+        Write-Host "Processing item: $fileName"
+
+        # Initialize metadata variables
+        $fiscalYear = $null
+        $partnerName = $null
+        $ombForm = $null
+        $product = $null
+
+        # Extract metadata from file name based on exact match
+        foreach ($fy in $fiscalYears) {
+            if ($fileName -match $fy) {
+                $fiscalYear = $fy
+                break
+            }
+        }
+
+        foreach ($partner in $partners) {
+            if ($fileName -match $partner) {
+                $partnerName = $partner
+                break
+            }
+        }
+
+        foreach ($form in $ombForms) {
+            if ($fileName -match $form) {
+                $ombForm = $form
+                break
+            }
+        }
+
+        foreach ($prod in $products) {
+            if ($fileName -match $prod) {
+                $product = $prod
+                break
+            }
+        }
+
+        # Only update the item if at least one of the metadata fields is identified
+        if ($fiscalYear -or $partnerName -or $ombForm -or $product) {
+            # Update the item metadata with the correct internal names
+            $updateValues = @{
+                "FiscalYear" = $fiscalYear
+                "Partnername" = $partnerName
+                "OMBForm" = $ombForm
+                "Product" = $product
+            }
+
+            Set-PnPListItem -List $library -Identity $item.Id -Values $updateValues
+        }
+    }
+}
+
+# Get all items in the library, including those in subfolders
+$items = Get-PnPListItem -List $library -PageSize 1000 -Fields "FileLeafRef"
+
+# Clear outdated values
+Clear-Columns -items $items
+
+# Process all items to update metadata
+Process-Items -items $items
+
+Write-Host "Metadata update completed."
